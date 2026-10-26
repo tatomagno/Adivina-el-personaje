@@ -6,11 +6,14 @@
 import React, { useState } from 'react';
 import { X, Users, Globe, Copy, Check, Play, Shield, Sparkles, Clock, ArrowRight } from 'lucide-react';
 import { CATEGORIES, DIFFICULTIES } from '../data/characters';
+import { OnlinePlayerState, OnlineRoomConfig, buildShareableRoomUrl } from '../utils/onlineSync';
 
 interface MultiplayerSetupModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialRoomCode?: string;
+  initialHostName?: string;
+  onlineRoomPlayers?: OnlinePlayerState[];
   onStartPassAndPlay: (config: {
     players: string[];
     isTeams: boolean;
@@ -25,7 +28,8 @@ interface MultiplayerSetupModalProps {
     category: string;
     roundsCount: number;
     timeLimit: number;
-  }) => Promise<string | null>;
+  }) => Promise<OnlineRoomConfig | null>;
+  onStartCreatedOnlineRoom: () => void;
   onJoinOnlineRoom: (code: string, playerName: string) => Promise<boolean>;
 }
 
@@ -33,8 +37,11 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
   isOpen,
   onClose,
   initialRoomCode,
+  initialHostName,
+  onlineRoomPlayers = [],
   onStartPassAndPlay,
   onCreateOnlineRoom,
+  onStartCreatedOnlineRoom,
   onJoinOnlineRoom,
 }) => {
   const [tab, setTab] = useState<'local' | 'online'>(initialRoomCode ? 'online' : 'local');
@@ -54,7 +61,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
   const [joinCode, setJoinCode] = useState(initialRoomCode || '');
   const [joinPlayerName, setJoinPlayerName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [createdRoomCode, setCreatedRoomCode] = useState<string | null>(null);
+  const [createdConfig, setCreatedConfig] = useState<OnlineRoomConfig | null>(null);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -89,15 +96,15 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
     setErrorMsg('');
     setLoading(true);
     try {
-      const code = await onCreateOnlineRoom({
+      const cfg = await onCreateOnlineRoom({
         hostName: hostName.trim(),
         difficulty,
         category,
         roundsCount,
         timeLimit,
       });
-      if (code) {
-        setCreatedRoomCode(code);
+      if (cfg) {
+        setCreatedConfig(cfg);
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Error al crear la sala');
@@ -118,7 +125,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
       if (ok) {
         onClose();
       } else {
-        setErrorMsg('No se encontró ninguna sala con este código');
+        setErrorMsg('Código inválido (debe tener al menos 4 letras/números)');
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Error al unirse a la sala');
@@ -127,10 +134,11 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
     }
   };
 
+  const shareUrl = createdConfig ? buildShareableRoomUrl(createdConfig) : '';
+
   const copyRoomLink = () => {
-    if (!createdRoomCode) return;
-    const url = `${window.location.origin}${window.location.pathname}?room=${createdRoomCode}`;
-    navigator.clipboard.writeText(url);
+    if (!shareUrl) return;
+    navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -393,7 +401,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
             )}
 
             {onlineAction === 'create' ? (
-              !createdRoomCode ? (
+              !createdConfig ? (
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs font-semibold text-stone-300 block mb-1">
@@ -403,7 +411,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                       type="text"
                       value={hostName}
                       onChange={(e) => setHostName(e.target.value)}
-                      placeholder="Ej. Líder Andrés, Hermana Ruth..."
+                      placeholder="Ej. Papá, Mamá, Líder Andrés..."
                       className="w-full bg-stone-950 border border-stone-700 rounded-xl px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-amber-400"
                       maxLength={25}
                     />
@@ -444,8 +452,55 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Rounds & Timer limit for Online Challenge */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-semibold text-stone-300 block mb-1">
+                        Rondas ({roundsCount} c/u)
+                      </label>
+                      <div className="flex gap-1.5">
+                        {[3, 5, 7, 10].map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            onClick={() => setRoundsCount(num)}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                              roundsCount === num
+                                ? 'bg-amber-500 text-stone-950'
+                                : 'bg-stone-950 border border-stone-800 text-stone-400'
+                            }`}
+                          >
+                            {num}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-stone-300 block mb-1">
+                        Tiempo por Turno
+                      </label>
+                      <div className="flex gap-1.5">
+                        {[30, 45, 60].map((sec) => (
+                          <button
+                            key={sec}
+                            type="button"
+                            onClick={() => setTimeLimit(sec)}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                              timeLimit === sec
+                                ? 'bg-amber-500 text-stone-950'
+                                : 'bg-stone-950 border border-stone-800 text-stone-400'
+                            }`}
+                          >
+                            {sec}s
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="bg-stone-950/60 p-3 rounded-xl border border-stone-800 text-xs text-stone-400">
-                    💡 <strong className="text-amber-300">Modo Asincrónico:</strong> Se generará un código único con la misma secuencia de personajes. Cualquier persona con el código podrá jugar a su propio ritmo y sus puntajes se ordenarán en la tabla de tu sala.
+                    💡 <strong className="text-amber-300">Sala Conectada en Vivo:</strong> Comparte el enlace con tu hija o amigos. Verás en tiempo real cuando se unan y sus puntajes se actualizarán en vivo en ambos celulares.
                   </div>
 
                   <button
@@ -454,23 +509,50 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                     disabled={loading}
                     className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-bold rounded-2xl flex items-center justify-center gap-2 text-sm sm:text-base transition-all shadow-xl active:scale-[0.98] cursor-pointer disabled:opacity-50"
                   >
-                    <span>{loading ? 'Generando Sala...' : 'Generar Código de Desafío'}</span>
+                    <span>{loading ? 'Generando Sala...' : 'Generar Código de Sala'}</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               ) : (
-                /* Created Room Code display */
+                /* Created Room Code & Live Waiting Lobby */
                 <div className="space-y-4 text-center py-2">
                   <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/40">
                     <span className="text-xs uppercase font-bold text-amber-400 block mb-1">
-                      Código de Desafío Generado
+                      Código de Sala Generado
                     </span>
                     <div className="font-mono text-3xl sm:text-4xl font-black text-amber-200 tracking-widest my-2 select-all">
-                      {createdRoomCode}
+                      {createdConfig.code}
                     </div>
                     <p className="text-xs text-stone-300">
-                      Cualquiera con este enlace o código jugará exactamente la misma partida y verás quién obtiene el mayor puntaje.
+                      Envía este enlace por WhatsApp. El tiempo no empezará a correr hasta que pulses «Empezar a Jugar».
                     </p>
+                  </div>
+
+                  {/* Live Connected Players List */}
+                  <div className="bg-stone-950/80 border border-amber-500/30 rounded-2xl p-3 text-left">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        Jugadores en la Sala ({onlineRoomPlayers.length || 1})
+                      </span>
+                      <span className="text-[11px] text-stone-400">
+                        {createdConfig.roundsCount} rondas · {createdConfig.timeLimit}s
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(onlineRoomPlayers.length > 0
+                        ? onlineRoomPlayers
+                        : [{ id: 'host', name: createdConfig.hostName, score: 0 }]
+                      ).map((p, i) => (
+                        <span
+                          key={p.id || i}
+                          className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-semibold flex items-center gap-1.5"
+                        >
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          {p.name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Share Action Buttons */}
@@ -487,23 +569,26 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
 
                       <a
                         href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
-                          `¡Te desafío a jugar Adivina el Personaje Bíblico! Entra con este enlace y trata de superar mi puntaje: ${window.location.origin}${window.location.pathname}?room=${createdRoomCode}`
+                          `¡Te invito a jugar Adivina el Personaje Bíblico conmigo! Entra a nuestra sala (${createdConfig.code}) tocando este enlace: ${shareUrl}`
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-600 text-white font-semibold rounded-xl text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors shadow cursor-pointer text-center"
                       >
-                        <span>Compartir en WhatsApp</span>
+                        <span>Enviar por WhatsApp</span>
                       </a>
                     </div>
 
                     <button
                       type="button"
-                      onClick={onClose}
-                      className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded-xl text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+                      onClick={() => {
+                        onStartCreatedOnlineRoom();
+                        onClose();
+                      }}
+                      className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-stone-950 font-black rounded-xl text-sm sm:text-base flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer mt-1"
                     >
                       <Play className="w-4 h-4 fill-stone-950" />
-                      <span>Empezar a Jugar mi Turno</span>
+                      <span>¡Empezar a Jugar Ahora!</span>
                     </button>
                   </div>
                 </div>
@@ -514,20 +599,22 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                 {initialRoomCode && (
                   <div className="p-3 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>¡Te han invitado al desafío con código <strong>{initialRoomCode}</strong>! Ingresa tu nombre para comenzar.</span>
+                    <span>
+                      ¡{initialHostName ? <strong>{initialHostName}</strong> : 'Te'} ha invitado al desafío en la sala <strong>{initialRoomCode}</strong>! Ingresa tu nombre para entrar.
+                    </span>
                   </div>
                 )}
 
                 <div>
                   <label className="text-xs font-semibold text-stone-300 block mb-1">
-                    Código de Sala (6 letras)
+                    Código de Sala
                   </label>
                   <input
                     type="text"
                     value={joinCode}
                     onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                    placeholder="Ej. AB3XYZ"
-                    maxLength={8}
+                    placeholder="Ej. F7K9X2"
+                    maxLength={10}
                     className="w-full bg-stone-950 border border-stone-700 rounded-xl px-3 py-2 text-base font-mono tracking-widest text-center text-amber-300 uppercase focus:outline-none focus:border-amber-400"
                   />
                 </div>
@@ -540,7 +627,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                     type="text"
                     value={joinPlayerName}
                     onChange={(e) => setJoinPlayerName(e.target.value)}
-                    placeholder="Ej. Mateo, Ruth, Familia Gómez..."
+                    placeholder="Ej. Sofi, Mateo, Ruth..."
                     maxLength={20}
                     className="w-full bg-stone-950 border border-stone-700 rounded-xl px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-amber-400"
                   />
@@ -553,7 +640,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                   className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-bold rounded-2xl flex items-center justify-center gap-2 text-sm sm:text-base transition-all shadow-xl active:scale-[0.98] cursor-pointer disabled:opacity-50"
                 >
                   <Globe className="w-4 h-4" />
-                  <span>{loading ? 'Conectando...' : 'Entrar al Desafío y Jugar'}</span>
+                  <span>{loading ? 'Conectando a la Sala...' : 'Entrar al Desafío y Jugar'}</span>
                 </button>
               </div>
             )}

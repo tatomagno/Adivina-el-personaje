@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, Trophy, Medal, Award, RefreshCw, Users, Shield } from 'lucide-react';
+import { fetchGlobalLeaderboardEntries } from '../utils/onlineSync';
 
 interface LeaderboardEntry {
   id: string;
@@ -86,6 +87,19 @@ export const GlobalLeaderboardModal: React.FC<GlobalLeaderboardModalProps> = ({
       const localSaved = JSON.parse(localStorage.getItem('biblical_leaderboard') || '[]');
       if (Array.isArray(localSaved)) {
         combined = [...combined, ...localSaved];
+      }
+    } catch {}
+
+    try {
+      const cloudEntries = await fetchGlobalLeaderboardEntries();
+      if (Array.isArray(cloudEntries) && cloudEntries.length > 0) {
+        const seenIds = new Set(combined.map((e) => e.id));
+        for (const ce of cloudEntries) {
+          if (!seenIds.has(ce.id)) {
+            combined.push(ce);
+            seenIds.add(ce.id);
+          }
+        }
       }
     } catch {}
 

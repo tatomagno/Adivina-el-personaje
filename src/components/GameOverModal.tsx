@@ -18,7 +18,7 @@ interface GameOverModalProps {
   onRestart: () => void;
   onHome: () => void;
   roomCode?: string;
-  playerScores?: { name: string; score: number; correctCount?: number }[];
+  playerScores?: { name: string; score: number; correctCount?: number; turnsPlayed?: number }[];
   onSubmitLeaderboard: (name: string, groupName?: string) => Promise<void>;
 }
 
@@ -43,8 +43,11 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   const handleShare = () => {
+    const shareUrl = roomCode
+      ? `${window.location.origin}${window.location.pathname}?room=${roomCode}`
+      : `${window.location.origin}${window.location.pathname}`;
     const text = `¡Acabo de obtener ${totalScore} puntos acertando ${correctCount}/${totalRounds} personajes bíblicos en Adivina el Personaje Bíblico! ¿Puedes superarme? ${
-      roomCode ? `Código de sala: ${roomCode}` : ''
+      roomCode ? `Entra a mi sala (${roomCode}): ${shareUrl}` : shareUrl
     }`;
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -123,43 +126,67 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
           </div>
         </div>
 
-        {/* Multiplayer Standings if 2+ players */}
-        {sortedPlayers.length > 1 && (
+        {/* Multiplayer Standings if 2+ players or Online Room */}
+        {(sortedPlayers.length > 1 || gameMode === 'online') && (
           <div className="bg-amber-950/30 border border-amber-500/30 rounded-2xl p-3.5 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300 uppercase tracking-wider">
                 <Users className="w-4 h-4" />
-                <span>Podio de Jugadores</span>
+                <span>{gameMode === 'online' ? `Podio Sala Online (${roomCode})` : 'Podio de Jugadores'}</span>
               </div>
-              {roundsPerPlayer && (
-                <span className="text-[11px] text-amber-400/80 font-mono">
-                  {roundsPerPlayer} personajes c/u
+              {gameMode === 'online' ? (
+                <span className="inline-flex items-center gap-1.5 text-[10px] text-emerald-400 font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  Sincronizado en vivo
                 </span>
+              ) : (
+                roundsPerPlayer && (
+                  <span className="text-[11px] text-amber-400/80 font-mono">
+                    {roundsPerPlayer} personajes c/u
+                  </span>
+                )
               )}
             </div>
             <div className="space-y-1.5">
-              {sortedPlayers.map((p, index) => (
-                <div
-                  key={index}
-                  className={`flex items-center justify-between p-2 rounded-xl text-xs sm:text-sm font-semibold ${
-                    index === 0
-                      ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
-                      : 'bg-stone-950/60 text-stone-300'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs w-4">#{index + 1}</span>
-                    <span>{p.name}</span>
-                    {p.correctCount !== undefined && roundsPerPlayer && (
-                      <span className="text-[11px] text-stone-400 font-normal">
-                        ({p.correctCount}/{roundsPerPlayer} aciertos)
-                      </span>
-                    )}
+              {sortedPlayers.map((p, index) => {
+                const isStillPlaying =
+                  gameMode === 'online' &&
+                  roundsPerPlayer &&
+                  p.turnsPlayed !== undefined &&
+                  p.turnsPlayed < roundsPerPlayer;
+                return (
+                  <div
+                    key={index}
+                    className={`flex items-center justify-between p-2 rounded-xl text-xs sm:text-sm font-semibold ${
+                      index === 0
+                        ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                        : 'bg-stone-950/60 text-stone-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs w-4">#{index + 1}</span>
+                      <span>{p.name}</span>
+                      {p.correctCount !== undefined && roundsPerPlayer && (
+                        <span className="text-[11px] text-stone-400 font-normal">
+                          ({p.correctCount}/{roundsPerPlayer} aciertos)
+                        </span>
+                      )}
+                      {isStillPlaying && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-normal animate-pulse">
+                          Jugando ({p.turnsPlayed}/{roundsPerPlayer})...
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono font-black text-amber-400">{p.score} pts</span>
                   </div>
-                  <span className="font-mono font-black text-amber-400">{p.score} pts</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
+            {gameMode === 'online' && sortedPlayers.length === 1 && (
+              <p className="text-[11px] text-stone-400 text-center pt-1">
+                Esperando a que el otro dispositivo juegue o avance de ronda... El marcador se actualizará solo.
+              </p>
+            )}
           </div>
         )}
 

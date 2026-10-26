@@ -22,6 +22,14 @@ import { PauseModal } from './components/PauseModal';
 import { MultiplayerSetupModal } from './components/MultiplayerSetupModal';
 import { GlobalLeaderboardModal } from './components/GlobalLeaderboardModal';
 import { sound } from './utils/audio';
+import {
+  OnlinePlayerState,
+  OnlineRoomConfig,
+  publishRoomEvent,
+  fetchCloudRoomSnapshot,
+  subscribeToCloudRoom,
+  publishGlobalLeaderboardEntry,
+} from './utils/onlineSync';
 
 type GameState = 'title' | 'playing' | 'paused' | 'gameover';
 type GameMode = 'solo' | 'duo' | 'equipos' | 'online';
@@ -66,7 +74,28 @@ export default function App() {
   // Online Room State
   const [roomCode, setRoomCode] = useState<string | undefined>(undefined);
   const [initialRoomCode, setInitialRoomCode] = useState<string | undefined>(undefined);
+  const [initialHostName, setInitialHostName] = useState<string | undefined>(undefined);
   const [onlinePlayerId, setOnlinePlayerId] = useState<string | undefined>(undefined);
+  const [pendingOnlineConfig, setPendingOnlineConfig] = useState<OnlineRoomConfig | null>(null);
+  const [onlineRoomPlayers, setOnlineRoomPlayers] = useState<OnlinePlayerState[]>([]);
+  const roomUnsubRef = useRef<(() => void) | null>(null);
+
+  // Subscribe to cloud room updates whenever roomCode changes
+  const connectToCloudRoom = useCallback((code: string) => {
+    if (roomUnsubRef.current) {
+      roomUnsubRef.current();
+    }
+    roomUnsubRef.current = subscribeToCloudRoom(code, (snapshot) => {
+      const list = Object.values(snapshot.players).sort((a, b) => b.score - a.score);
+      setOnlineRoomPlayers(list);
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (roomUnsubRef.current) roomUnsubRef.current();
+    };
+  }, []);
 
   // Modals
   const [showMultiplayerModal, setShowMultiplayerModal] = useState<boolean>(false);
@@ -85,9 +114,11 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const autostart = params.get('autostart');
     const roomParam = params.get('room');
+    const hostParam = params.get('h');
 
     if (roomParam) {
       setInitialRoomCode(roomParam.toUpperCase());
+      if (hostParam) setInitialHostName(hostParam);
       setShowMultiplayerModal(true);
     } else if (autostart === '1') {
       startMatch({
@@ -283,20 +314,44 @@ export default function App() {
 
     setLastScoreBreakdown(breakdown);
 
+    const updatedScore = (activePlayer?.score ?? 0) + earnedPoints;
+    const updatedStreak = isCorrect ? (activePlayer?.streak ?? 0) + 1 : 0;
+    const updatedCorrectCount = (activePlayer?.correctCount ?? 0) + (isCorrect ? 1 : 0);
+    const updatedTurnsPlayed = (activePlayer?.turnsPlayed ?? 0) + 1;
+
     // Update active player's score, streak, correctCount, and turnsPlayed
     setPlayers((prev) =>
       prev.map((p, idx) =>
         idx === activePlayerIndex
           ? {
               ...p,
-              score: p.score + earnedPoints,
-              streak: isCorrect ? p.streak + 1 : 0,
-              correctCount: p.correctCount + (isCorrect ? 1 : 0),
-              turnsPlayed: p.turnsPlayed + 1,
+              score: updatedScore,
+              streak: updatedStreak,
+              correctCount: updatedCorrectCount,
+              turnsPlayed: updatedTurnsPlayed,
             }
           : p
       )
     );
+
+    // If in an online room, publish live round progress so other devices see it in real time
+    if (gameMode === 'online' && roomCode && onlinePlayerId) {
+      const isFinalTurn = currentRoundIndex + 1 >= matchCharacters.length;
+      const playerState: OnlinePlayerState = {
+        id: onlinePlayerId,
+        name: activePlayer?.name || 'Jugador',
+        score: updatedScore,
+        correctCount: updatedCorrectCount,
+        turnsPlayed: updatedTurnsPlayed,
+        totalRounds: matchCharacters.length,
+        completed: isFinalTurn,
+        updatedAt: Date.now(),
+      };
+      publishRoomEvent(roomCode, {
+        type: 'player_update',
+        player: playerState,
+      });
+    }
 
     // Record history with player name
     setHistory((prev) => [
@@ -337,7 +392,7 @@ export default function App() {
       // Auto-submit async room run if in an online room
       if (roomCode) {
         const totalScore = players.reduce((sum, p) => sum + p.score, 0);
-        const correctAnswers = history.filter((h) => h.guessed).length + (lastRoundCorrect ? 1 : 0);
+        const correctAnswers = history.filter((h) => h.guessed).length;
         fetch(`/api/rooms/${roomCode}/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -348,12 +403,12 @@ export default function App() {
             correctAnswers,
             totalTimeUsed: timeLimit * matchCharacters.length - timeRemaining,
           }),
-        }).catch(console.error);
+        }).catch(() => {});
       }
     }
   };
 
-  // Submit to Global Leaderboard API (with localStorage fallback for static hosts like GitHub Pages / Vercel)
+  // Submit to Global Leaderboard API + Cloud Sync + localStorage
   const handleLeaderboardSubmit = async (name: string, groupName?: string) => {
     const totalScore = players.reduce((sum, p) => sum + p.score, 0);
     const correctCount = history.filter((h) => h.guessed).length;
@@ -375,6 +430,8 @@ export default function App() {
       localStorage.setItem('biblical_leaderboard', JSON.stringify(saved));
     } catch {}
 
+    publishGlobalLeaderboardEntry(entry).catch(() => {});
+
     try {
       await fetch('/api/leaderboard', {
         method: 'POST',
@@ -384,14 +441,14 @@ export default function App() {
     } catch {}
   };
 
-  // Online Room Creation API (with deterministic seed code fallback for static hosting)
+  // Online Room Creation (Real-time cloud pub/sub + URL query encoding for static hosting like GitHub Pages)
   const handleCreateOnlineRoom = async (config: {
     hostName: string;
     difficulty: 'facil' | 'medio' | 'dificil' | 'todas';
     category: string;
     roundsCount: number;
     timeLimit: number;
-  }): Promise<string | null> => {
+  }): Promise<OnlineRoomConfig | null> => {
     const diffPrefix =
       config.difficulty === 'facil'
         ? 'F'
@@ -401,82 +458,104 @@ export default function App() {
         ? 'T'
         : 'M';
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let fallbackCode = diffPrefix;
+    let generatedCode = diffPrefix;
     for (let i = 0; i < 5; i++) {
-      fallbackCode += chars.charAt(Math.floor(Math.random() * chars.length));
+      generatedCode += chars.charAt(Math.floor(Math.random() * chars.length));
     }
+
+    const hostId = `host_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    let finalRoomConfig: OnlineRoomConfig = {
+      code: generatedCode,
+      seed: generatedCode,
+      hostName: config.hostName,
+      difficulty: config.difficulty,
+      category: config.category,
+      roundsCount: config.roundsCount,
+      timeLimit: config.timeLimit,
+    };
 
     try {
       const res = await fetch('/api/rooms/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...config, seed: fallbackCode }),
+        body: JSON.stringify({ ...config, seed: generatedCode }),
       });
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
-        if (data.success) {
-          setOnlinePlayerId(data.playerId);
-          startMatch({
-            mode: 'online',
-            diff: config.difficulty,
-            cat: config.category,
-            rounds: config.roundsCount,
-            time: config.timeLimit,
-            playerNames: [config.hostName],
-            roomCode: data.room.code,
+        if (data.success && data.room) {
+          finalRoomConfig = {
+            code: data.room.code,
             seed: data.room.seed,
-          });
-          return data.room.code;
+            hostName: config.hostName,
+            difficulty: config.difficulty,
+            category: config.category,
+            roundsCount: config.roundsCount,
+            timeLimit: config.timeLimit,
+          };
         }
       }
     } catch {}
 
-    // Fallback for static hosting (GitHub Pages / Vercel): room code itself encodes difficulty + deterministic seed
-    startMatch({
-      mode: 'online',
-      diff: config.difficulty,
-      cat: config.category,
-      rounds: config.roundsCount,
-      time: config.timeLimit,
-      playerNames: [config.hostName],
-      roomCode: fallbackCode,
-      seed: fallbackCode,
+    const initialHostPlayer: OnlinePlayerState = {
+      id: hostId,
+      name: config.hostName,
+      score: 0,
+      correctCount: 0,
+      turnsPlayed: 0,
+      totalRounds: config.roundsCount,
+      completed: false,
+      updatedAt: Date.now(),
+    };
+
+    setOnlinePlayerId(hostId);
+    setRoomCode(finalRoomConfig.code);
+    setPendingOnlineConfig(finalRoomConfig);
+    setOnlineRoomPlayers([initialHostPlayer]);
+
+    // Publish room creation to cloud channel so any device joining by code or link gets full config + sees host
+    await publishRoomEvent(finalRoomConfig.code, {
+      type: 'room_created',
+      config: finalRoomConfig,
+      hostPlayer: initialHostPlayer,
     });
-    return fallbackCode;
+
+    // Subscribe to live updates (so host sees when daughter/friend joins in the lobby and during the game)
+    connectToCloudRoom(finalRoomConfig.code);
+
+    return finalRoomConfig;
   };
 
-  // Online Room Join API (with deterministic seed code fallback for static hosting)
+  // Start the match once the host clicks "¡Empezar a Jugar Ahora!" in the waiting lobby
+  const handleStartCreatedOnlineRoom = () => {
+    if (!pendingOnlineConfig) return;
+    startMatch({
+      mode: 'online',
+      diff: pendingOnlineConfig.difficulty,
+      cat: pendingOnlineConfig.category,
+      rounds: pendingOnlineConfig.roundsCount,
+      time: pendingOnlineConfig.timeLimit,
+      playerNames: [pendingOnlineConfig.hostName],
+      roomCode: pendingOnlineConfig.code,
+      seed: pendingOnlineConfig.seed,
+    });
+  };
+
+  // Online Room Join (Fetches cloud room state + URL parameters fallback so both devices always get identical settings)
   const handleJoinOnlineRoom = async (code: string, playerName: string): Promise<boolean> => {
     const cleanCode = code.trim().toUpperCase();
     if (cleanCode.length < 4) return false;
 
-    try {
-      const res = await fetch(`/api/rooms/${cleanCode}/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerName }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          const room = data.room;
-          setOnlinePlayerId(data.playerId);
-          startMatch({
-            mode: 'online',
-            diff: room.difficulty,
-            cat: room.category,
-            rounds: room.roundsCount,
-            time: room.timeLimit,
-            playerNames: [playerName],
-            roomCode: room.code,
-            seed: room.seed,
-          });
-          return true;
-        }
-      }
-    } catch {}
+    const guestId = `guest_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
 
-    // Static fallback: decode difficulty from first character and use code as deterministic seed
+    // 1. Check URL query parameters first (if user opened a shared link)
+    const params = new URLSearchParams(window.location.search);
+    const urlDiff = params.get('d') as 'facil' | 'medio' | 'dificil' | 'todas' | null;
+    const urlRounds = params.get('r') ? parseInt(params.get('r')!, 10) : null;
+    const urlTime = params.get('t') ? parseInt(params.get('t')!, 10) : null;
+    const urlCat = params.get('c');
+
+    // 2. Decode difficulty prefix as baseline fallback
     const firstChar = cleanCode.charAt(0);
     const decodedDiff: 'facil' | 'medio' | 'dificil' | 'todas' =
       firstChar === 'F'
@@ -487,15 +566,88 @@ export default function App() {
         ? 'todas'
         : 'medio';
 
+    let resolvedConfig: OnlineRoomConfig = {
+      code: cleanCode,
+      seed: cleanCode,
+      hostName: initialHostName || 'Anfitrión',
+      difficulty: urlDiff || decodedDiff,
+      category: urlCat || 'Todos',
+      roundsCount: urlRounds && !isNaN(urlRounds) ? urlRounds : 5,
+      timeLimit: urlTime && !isNaN(urlTime) ? urlTime : 45,
+    };
+
+    // 3. Fetch cloud room snapshot (works even if guest only typed the 6-letter code manually!)
+    try {
+      const cloudSnapshot = await fetchCloudRoomSnapshot(cleanCode);
+      if (cloudSnapshot.config) {
+        resolvedConfig = cloudSnapshot.config;
+      }
+      const existingPlayers = Object.values(cloudSnapshot.players);
+      if (existingPlayers.length > 0) {
+        setOnlineRoomPlayers(existingPlayers);
+      }
+    } catch {}
+
+    // 4. Optional local backend check
+    try {
+      const res = await fetch(`/api/rooms/${cleanCode}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerName }),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.success && data.room) {
+          resolvedConfig = {
+            code: data.room.code,
+            seed: data.room.seed,
+            hostName: resolvedConfig.hostName,
+            difficulty: data.room.difficulty,
+            category: data.room.category,
+            roundsCount: data.room.roundsCount,
+            timeLimit: data.room.timeLimit,
+          };
+        }
+      }
+    } catch {}
+
+    const guestPlayerState: OnlinePlayerState = {
+      id: guestId,
+      name: playerName,
+      score: 0,
+      correctCount: 0,
+      turnsPlayed: 0,
+      totalRounds: resolvedConfig.roundsCount,
+      completed: false,
+      updatedAt: Date.now(),
+    };
+
+    setOnlinePlayerId(guestId);
+    setRoomCode(cleanCode);
+
+    // Announce guest join to cloud room so host sees guest immediately
+    await publishRoomEvent(cleanCode, {
+      type: 'player_update',
+      player: guestPlayerState,
+    });
+
+    connectToCloudRoom(cleanCode);
+
+    // Clean URL params gently without reloading so refreshing doesn't re-pop the modal unnecessarily
+    if (window.location.search.includes('room=')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     startMatch({
       mode: 'online',
-      diff: decodedDiff,
-      cat: 'Todos',
-      rounds: 5,
-      time: 45,
+      diff: resolvedConfig.difficulty,
+      cat: resolvedConfig.category,
+      rounds: resolvedConfig.roundsCount,
+      time: resolvedConfig.timeLimit,
       playerNames: [playerName],
-      roomCode: cleanCode,
-      seed: cleanCode,
+      roomCode: resolvedConfig.code,
+      seed: resolvedConfig.seed,
     });
     return true;
   };
@@ -510,6 +662,36 @@ export default function App() {
 
   const totalScoreAll = players.reduce((sum, p) => sum + p.score, 0);
   const correctCountAll = history.filter((h) => h.guessed).length;
+
+  // Build unified scoreboard for online mode (merging local player state with live cloud players)
+  const displayScoreboard: PlayerInfo[] | undefined =
+    gameMode === 'online'
+      ? (() => {
+          const map = new Map<string, PlayerInfo>();
+          for (const op of onlineRoomPlayers) {
+            map.set(op.id, {
+              name: op.name,
+              score: op.score,
+              streak: 0,
+              correctCount: op.correctCount,
+              turnsPlayed: op.turnsPlayed,
+            });
+          }
+          if (onlinePlayerId && players[0]) {
+            map.set(onlinePlayerId, {
+              name: players[0].name,
+              score: players[0].score,
+              streak: players[0].streak,
+              correctCount: players[0].correctCount,
+              turnsPlayed: players[0].turnsPlayed,
+            });
+          }
+          const list = Array.from(map.values()).sort((a, b) => b.score - a.score);
+          return list.length > 0 ? list : players;
+        })()
+      : players.length > 1
+      ? players
+      : undefined;
 
   return (
     <div className="w-full min-h-screen bg-stone-950 text-stone-100 flex flex-col justify-between font-sans relative select-none">
@@ -604,7 +786,7 @@ export default function App() {
           nextPlayerName={
             players.length > 1 ? players[(activePlayerIndex + 1) % players.length]?.name : undefined
           }
-          playerScores={players.length > 1 ? players : undefined}
+          playerScores={displayScoreboard}
         />
       )}
 
@@ -621,6 +803,7 @@ export default function App() {
               time: timeLimit,
               playerNames: players.map((p) => p.name),
               roomCode,
+              seed: roomCode,
             })
           }
           onHome={() => setGameState('title')}
@@ -646,11 +829,12 @@ export default function App() {
               time: timeLimit,
               playerNames: players.map((p) => p.name),
               roomCode,
+              seed: roomCode,
             })
           }
           onHome={() => setGameState('title')}
           roomCode={roomCode}
-          playerScores={players.length > 1 ? players : undefined}
+          playerScores={displayScoreboard}
           onSubmitLeaderboard={handleLeaderboardSubmit}
         />
       )}
@@ -660,6 +844,8 @@ export default function App() {
         isOpen={showMultiplayerModal}
         onClose={() => setShowMultiplayerModal(false)}
         initialRoomCode={initialRoomCode}
+        initialHostName={initialHostName}
+        onlineRoomPlayers={onlineRoomPlayers}
         onStartPassAndPlay={(config) => {
           startMatch({
             mode: config.isTeams ? 'equipos' : 'duo',
@@ -671,6 +857,7 @@ export default function App() {
           });
         }}
         onCreateOnlineRoom={handleCreateOnlineRoom}
+        onStartCreatedOnlineRoom={handleStartCreatedOnlineRoom}
         onJoinOnlineRoom={handleJoinOnlineRoom}
       />
 
