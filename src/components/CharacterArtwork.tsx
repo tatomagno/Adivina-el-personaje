@@ -232,7 +232,10 @@ export const CharacterArtwork: React.FC<CharacterArtworkProps> = ({
 
       {/* Mystery Overlay when not revealed */}
       {!revealed && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+        <div
+          key="mystery-overlay"
+          className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
+        >
           <div className="relative flex items-center justify-center">
             {/* Halo ring pulse */}
             <div className="w-16 h-16 rounded-full border border-amber-400/40 animate-ping absolute" />
@@ -241,38 +244,45 @@ export const CharacterArtwork: React.FC<CharacterArtworkProps> = ({
             </div>
           </div>
           <div className="mt-3 px-3 py-1 rounded-full bg-stone-900/90 border border-amber-500/30 text-amber-200/90 text-xs font-medium tracking-wide">
-            {cluesUsed === 0
-              ? 'Silueta misteriosa'
-              : `Pistas pedidas: ${cluesUsed}/5 · Imagen al ${clarity}%`}
+            <span>
+              {cluesUsed === 0
+                ? 'Silueta misteriosa'
+                : `Pistas pedidas: ${cluesUsed}/5 · Imagen al ${clarity}%`}
+            </span>
           </div>
         </div>
       )}
 
       {/* Correct / Victory Banner */}
       {revealed && (
-        <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black via-stone-950/90 to-transparent flex flex-col items-center text-center animate-in fade-in duration-300">
+        <div
+          key="revealed-banner"
+          className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black via-stone-950/90 to-transparent flex flex-col items-center text-center animate-in fade-in duration-300"
+        >
           <span className="text-xs uppercase tracking-widest font-semibold text-amber-400">
-            {character.category} · {character.testament} T.
+            {`${character.category} · ${character.testament} T.`}
           </span>
           <h2 className="text-xl sm:text-2xl font-bold font-serif text-amber-100 drop-shadow-md">
             {character.name}
           </h2>
           <p className="text-xs text-stone-300 italic line-clamp-1 mt-0.5">
-            "{character.title}"
+            {`"${character.title}"`}
           </p>
         </div>
       )}
 
       {/* Badges preview in corner */}
       <div className="absolute top-3 left-3 flex flex-wrap gap-1 max-w-[170px] pointer-events-none">
-        {character.visualBadges.slice(0, cluesUsed >= 3 ? 3 : cluesUsed >= 1 ? 1 : 0).map((badge, i) => (
-          <span
-            key={i}
-            className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded backdrop-blur-sm animate-in fade-in zoom-in-95 duration-200"
-          >
-            {badge}
-          </span>
-        ))}
+        {(character.visualBadges || [])
+          .slice(0, cluesUsed >= 3 ? 3 : cluesUsed >= 1 ? 1 : 0)
+          .map((badge, i) => (
+            <span
+              key={i}
+              className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded backdrop-blur-sm animate-in fade-in zoom-in-95 duration-200"
+            >
+              {badge}
+            </span>
+          ))}
       </div>
     </div>
   );
