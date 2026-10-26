@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, ArrowRight, BookOpen, Sparkles, Award } from 'lucide-react';
 import { BiblicalCharacter } from '../data/characters';
 import { ScoreBreakdown } from '../game/scoring';
@@ -19,6 +19,7 @@ interface RoundResultModalProps {
   activePlayerName?: string;
   nextPlayerName?: string;
   playerScores?: { name: string; score: number; correctCount?: number; turnsPlayed?: number }[];
+  gameMode?: string;
 }
 
 export const RoundResultModal: React.FC<RoundResultModalProps> = ({
@@ -32,7 +33,28 @@ export const RoundResultModal: React.FC<RoundResultModalProps> = ({
   activePlayerName,
   nextPlayerName,
   playerScores,
+  gameMode,
 }) => {
+  const [autoAdvanceSec, setAutoAdvanceSec] = useState<number | null>(
+    gameMode === 'online' ? 12 : null
+  );
+
+  useEffect(() => {
+    if (gameMode !== 'online') return;
+    setAutoAdvanceSec(12);
+    const interval = setInterval(() => {
+      setAutoAdvanceSec((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          clearInterval(interval);
+          onNextRound();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [gameMode, character.id]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       <div className="w-full max-w-lg bg-stone-900 border-2 border-amber-500/50 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
@@ -150,10 +172,10 @@ export const RoundResultModal: React.FC<RoundResultModalProps> = ({
         >
           <span>
             {isLastRound
-              ? 'Ver Resultados Finales'
+              ? `Ver Resultados Finales${autoAdvanceSec !== null ? ` (${autoAdvanceSec}s)` : ''}`
               : nextPlayerName
               ? `Siguiente Turno: ${nextPlayerName}`
-              : 'Siguiente Personaje'}
+              : `Siguiente Personaje${autoAdvanceSec !== null ? ` (${autoAdvanceSec}s)` : ''}`}
           </span>
           <ArrowRight className="w-5 h-5" />
         </button>

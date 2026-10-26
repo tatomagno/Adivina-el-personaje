@@ -4,9 +4,9 @@
  */
 
 import React, { useState } from 'react';
-import { X, Users, Globe, Copy, Check, Play, Shield, Sparkles, Clock, ArrowRight } from 'lucide-react';
+import { X, Users, Globe, Copy, Check, Play, Shield, Sparkles, Clock, ArrowRight, Trophy } from 'lucide-react';
 import { CATEGORIES, DIFFICULTIES } from '../data/characters';
-import { OnlinePlayerState, OnlineRoomConfig, buildShareableRoomUrl } from '../utils/onlineSync';
+import { OnlinePlayerState, OnlineRoomConfig, RecentRoomEntry, buildShareableRoomUrl } from '../utils/onlineSync';
 
 interface MultiplayerSetupModalProps {
   isOpen: boolean;
@@ -14,6 +14,7 @@ interface MultiplayerSetupModalProps {
   initialRoomCode?: string;
   initialHostName?: string;
   onlineRoomPlayers?: OnlinePlayerState[];
+  recentRooms?: RecentRoomEntry[];
   onStartPassAndPlay: (config: {
     players: string[];
     isTeams: boolean;
@@ -31,6 +32,7 @@ interface MultiplayerSetupModalProps {
   }) => Promise<OnlineRoomConfig | null>;
   onStartCreatedOnlineRoom: () => void;
   onJoinOnlineRoom: (code: string, playerName: string) => Promise<boolean>;
+  onViewOnlineRoomPodio?: (code: string, playerName?: string) => Promise<boolean>;
 }
 
 export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
@@ -39,10 +41,12 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
   initialRoomCode,
   initialHostName,
   onlineRoomPlayers = [],
+  recentRooms = [],
   onStartPassAndPlay,
   onCreateOnlineRoom,
   onStartCreatedOnlineRoom,
   onJoinOnlineRoom,
+  onViewOnlineRoomPodio,
 }) => {
   const [tab, setTab] = useState<'local' | 'online'>(initialRoomCode ? 'online' : 'local');
 
@@ -129,6 +133,30 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Error al unirse a la sala');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleViewPodioOnly = async (codeToView?: string, nameToUse?: string) => {
+    const targetCode = (codeToView || joinCode).trim().toUpperCase();
+    if (!targetCode || targetCode.length < 4) {
+      setErrorMsg('Ingresa el código de la sala (ej. MFDNLS) para ver su podio');
+      return;
+    }
+    setErrorMsg('');
+    setLoading(true);
+    try {
+      if (onViewOnlineRoomPodio) {
+        const ok = await onViewOnlineRoomPodio(targetCode, (nameToUse ?? joinPlayerName).trim() || undefined);
+        if (ok) {
+          onClose();
+        } else {
+          setErrorMsg('No se pudo cargar la sala');
+        }
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error al consultar la sala');
     } finally {
       setLoading(false);
     }
@@ -633,15 +661,59 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
                   />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleJoinRoom}
-                  disabled={loading}
-                  className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-bold rounded-2xl flex items-center justify-center gap-2 text-sm sm:text-base transition-all shadow-xl active:scale-[0.98] cursor-pointer disabled:opacity-50"
-                >
-                  <Globe className="w-4 h-4" />
-                  <span>{loading ? 'Conectando a la Sala...' : 'Entrar al Desafío y Jugar'}</span>
-                </button>
+                <div className="flex flex-col gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleJoinRoom}
+                    disabled={loading}
+                    className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-bold rounded-2xl flex items-center justify-center gap-2 text-sm sm:text-base transition-all shadow-xl active:scale-[0.98] cursor-pointer disabled:opacity-50"
+                  >
+                    <Globe className="w-4 h-4" />
+                    <span>{loading ? 'Conectando a la Sala...' : 'Entrar / Retomar Competencia'}</span>
+                  </button>
+
+                  {onViewOnlineRoomPodio && (
+                    <button
+                      type="button"
+                      onClick={() => handleViewPodioOnly()}
+                      disabled={loading}
+                      className="w-full py-2.5 bg-stone-800 hover:bg-stone-700 text-amber-300 font-semibold rounded-xl border border-amber-500/30 flex items-center justify-center gap-2 text-xs sm:text-sm transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Trophy className="w-4 h-4 text-amber-400" />
+                      <span>Solo Ver Podio / Resultados de esta Sala</span>
+                    </button>
+                  )}
+                </div>
+
+                {recentRooms.length > 0 && (
+                  <div className="pt-2 border-t border-stone-800 space-y-2">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">
+                      Tus Salas Online Recientes:
+                    </span>
+                    <div className="space-y-1.5">
+                      {recentRooms.map((r) => (
+                        <div
+                          key={r.code}
+                          className="flex items-center justify-between p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-xs"
+                        >
+                          <div>
+                            <span className="font-mono font-bold text-amber-300">{r.code}</span>
+                            <span className="text-stone-400 ml-2">{`Jugador: ${r.playerName}`}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleViewPodioOnly(r.code, r.playerName)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-semibold cursor-pointer"
+                            >
+                              Ver Podio
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

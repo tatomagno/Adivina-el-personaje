@@ -225,3 +225,41 @@ export async function fetchGlobalLeaderboardEntries(): Promise<any[]> {
     return [];
   }
 }
+
+export interface RecentRoomEntry {
+  code: string;
+  playerName: string;
+  playerId: string;
+  difficulty: 'facil' | 'medio' | 'dificil' | 'todas';
+  category: string;
+  roundsCount: number;
+  timeLimit: number;
+  updatedAt: number;
+}
+
+const RECENT_ROOMS_KEY = 'biblical_recent_rooms_v2';
+
+export function getRecentRooms(): RecentRoomEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENT_ROOMS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveRecentRoom(entry: RecentRoomEntry): RecentRoomEntry[] {
+  try {
+    const existing = getRecentRooms().filter(
+      (r) => r.code.toUpperCase() !== entry.code.toUpperCase()
+    );
+    const updated = [entry, ...existing].slice(0, 6);
+    localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return [entry];
+  }
+}
+

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Trophy, RotateCcw, Home, Share2, Check, Send, Award, Users, BookOpen } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Trophy, RotateCcw, Home, Share2, Check, Send, Award, Users, RefreshCw } from 'lucide-react';
 import { BiblicalCharacter } from '../data/characters';
 
 interface GameOverModalProps {
@@ -12,13 +12,22 @@ interface GameOverModalProps {
   correctCount: number;
   totalRounds: number;
   roundsPerPlayer?: number;
+  timeLimit?: number;
   difficulty: string;
   gameMode: string;
   charactersPlayed: { character: BiblicalCharacter; guessed: boolean; score: number; playerName?: string }[];
   onRestart: () => void;
   onHome: () => void;
   roomCode?: string;
-  playerScores?: { name: string; score: number; correctCount?: number; turnsPlayed?: number }[];
+  playerScores?: {
+    name: string;
+    score: number;
+    correctCount?: number;
+    turnsPlayed?: number;
+    completed?: boolean;
+    updatedAt?: number;
+  }[];
+  onRefreshOnlineRoom?: () => void;
   onSubmitLeaderboard: (name: string, groupName?: string) => Promise<void>;
 }
 
@@ -27,6 +36,7 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   correctCount,
   totalRounds,
   roundsPerPlayer,
+  timeLimit = 60,
   difficulty,
   gameMode,
   charactersPlayed,
@@ -34,6 +44,7 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   onHome,
   roomCode,
   playerScores,
+  onRefreshOnlineRoom,
   onSubmitLeaderboard,
 }) => {
   const [playerName, setPlayerName] = useState('');
@@ -41,6 +52,23 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   const [submitted, setSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    if (gameMode !== 'online') return;
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [gameMode]);
+
+  const handleManualRefresh = () => {
+    if (!onRefreshOnlineRoom) return;
+    setRefreshing(true);
+    onRefreshOnlineRoom();
+    setTimeout(() => setRefreshing(false), 600);
+  };
 
   const handleShare = () => {
     const shareUrl = roomCode
@@ -129,31 +157,55 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         {/* Multiplayer Standings if 2+ players or Online Room */}
         {(sortedPlayers.length > 1 || gameMode === 'online') && (
           <div className="bg-amber-950/30 border border-amber-500/30 rounded-2xl p-3.5 space-y-2">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300 uppercase tracking-wider">
                 <Users className="w-4 h-4" />
                 <span>{gameMode === 'online' ? `Podio Sala Online (${roomCode})` : 'Podio de Jugadores'}</span>
               </div>
               {gameMode === 'online' ? (
-                <span className="inline-flex items-center gap-1.5 text-[10px] text-emerald-400 font-semibold">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  Sincronizado en vivo
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-[10px] text-emerald-400 font-semibold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    <span>Sincronizado en vivo</span>
+                  </span>
+                  {onRefreshOnlineRoom && (
+                    <button
+                      type="button"
+                      onClick={handleManualRefresh}
+                      className="px-2 py-0.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-300 border border-amber-500/30 text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+                      <span>Actualizar</span>
+                    </button>
+                  )}
+                </div>
               ) : (
                 roundsPerPlayer && (
                   <span className="text-[11px] text-amber-400/80 font-mono">
-                    {roundsPerPlayer} personajes c/u
+                    {`${roundsPerPlayer} personajes c/u`}
                   </span>
                 )
               )}
             </div>
             <div className="space-y-1.5">
               {sortedPlayers.map((p, index) => {
-                const isStillPlaying =
+                const targetRounds = roundsPerPlayer || totalRounds;
+                const played = p.turnsPlayed ?? 0;
+                const isCompleted = p.completed || played >= targetRounds;
+                // A round can last at most timeLimit + 20s between-round buffer
+                const maxRoundWindowSec = (timeLimit || 60) + 20;
+                const elapsedSec = p.updatedAt
+                  ? Math.max(0, Math.floor((now - p.updatedAt) / 1000))
+                  : 0;
+                const isTimedOutOrLeft =
                   gameMode === 'online' &&
-                  roundsPerPlayer &&
-                  p.turnsPlayed !== undefined &&
-                  p.turnsPlayed < roundsPerPlayer;
+                  !isCompleted &&
+                  p.updatedAt !== undefined &&
+                  elapsedSec > maxRoundWindowSec;
+                const isActivelyPlaying =
+                  gameMode === 'online' && !isCompleted && !isTimedOutOrLeft;
+                const remainingRoundSec = Math.max(1, maxRoundWindowSec - elapsedSec);
+
                 return (
                   <div
                     key={index}
@@ -164,20 +216,30 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
                     }`}
                   >
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs w-4">#{index + 1}</span>
+                      <span className="font-mono text-xs w-4">{`#${index + 1}`}</span>
                       <span>{p.name}</span>
-                      {p.correctCount !== undefined && roundsPerPlayer && (
+                      {p.correctCount !== undefined && targetRounds && (
                         <span className="text-[11px] text-stone-400 font-normal">
-                          ({p.correctCount}/{roundsPerPlayer} aciertos)
+                          {`(${p.correctCount}/${targetRounds} aciertos)`}
                         </span>
                       )}
-                      {isStillPlaying && (
+                      {gameMode === 'online' && isCompleted && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-normal">
+                          Finalizó
+                        </span>
+                      )}
+                      {isActivelyPlaying && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-normal animate-pulse">
-                          Jugando ({p.turnsPlayed}/{roundsPerPlayer})...
+                          {`Jugando (${played + 1}/${targetRounds}) · ${remainingRoundSec}s`}
+                        </span>
+                      )}
+                      {isTimedOutOrLeft && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-800 text-stone-400 font-normal">
+                          {`Tiempo agotado (${played}/${targetRounds} rondas)`}
                         </span>
                       )}
                     </div>
-                    <span className="font-mono font-black text-amber-400">{p.score} pts</span>
+                    <span className="font-mono font-black text-amber-400">{`${p.score} pts`}</span>
                   </div>
                 );
               })}
@@ -190,33 +252,35 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
           </div>
         )}
 
-        {/* Characters Review List */}
-        <div className="bg-stone-950/60 border border-amber-500/20 rounded-2xl p-3 max-h-36 overflow-y-auto space-y-1.5">
-          <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block mb-1">
-            Personajes de la Partida:
-          </span>
-          {charactersPlayed.map(({ character, guessed, score, playerName: pName }, i) => (
-            <div
-              key={i}
-              className="flex items-center justify-between py-1 px-2 rounded-lg bg-stone-900/60 text-xs"
-            >
-              <div className="flex items-center gap-2">
-                {guessed ? (
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                ) : (
-                  <span className="w-3.5 h-3.5 text-rose-400 text-center font-bold">✕</span>
-                )}
-                <span className="font-medium text-stone-200">{character.name}</span>
-                {pName && sortedPlayers.length > 1 && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-800 text-amber-300/80">
-                    {pName}
-                  </span>
-                )}
+        {/* Characters Review List (only if characters were played locally in this session) */}
+        {charactersPlayed.length > 0 && (
+          <div className="bg-stone-950/60 border border-amber-500/20 rounded-2xl p-3 max-h-36 overflow-y-auto space-y-1.5">
+            <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block mb-1">
+              Personajes de la Partida:
+            </span>
+            {charactersPlayed.map(({ character, guessed, score, playerName: pName }, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between py-1 px-2 rounded-lg bg-stone-900/60 text-xs"
+              >
+                <div className="flex items-center gap-2">
+                  {guessed ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <span className="w-3.5 h-3.5 text-rose-400 text-center font-bold">✕</span>
+                  )}
+                  <span className="font-medium text-stone-200">{character.name}</span>
+                  {pName && sortedPlayers.length > 1 && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-800 text-amber-300/80">
+                      {pName}
+                    </span>
+                  )}
+                </div>
+                <span className="font-mono text-stone-400">{`+${score} pts`}</span>
               </div>
-              <span className="font-mono text-stone-400">+{score} pts</span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* Submit to Global Leaderboard Form */}
         {!submitted ? (

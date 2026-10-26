@@ -17,6 +17,8 @@ interface TitleScreenProps {
   onOpenLeaderboard: () => void;
   isMuted: boolean;
   onToggleMute: () => void;
+  recentRoom?: { code: string; playerName: string } | null;
+  onRejoinRecentRoom?: () => void;
 }
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
@@ -29,6 +31,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenLeaderboard,
   isMuted,
   onToggleMute,
+  recentRoom,
+  onRejoinRecentRoom,
 }) => {
   return (
     <div className="relative w-full min-h-screen bg-stone-950 text-stone-100 flex flex-col justify-between items-center px-4 py-6 sm:py-8 overflow-hidden select-none">
@@ -139,6 +143,22 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
 
         {/* Primary Action Buttons */}
         <div className="w-full max-w-md mt-6 flex flex-col gap-2.5">
+          {recentRoom && onRejoinRecentRoom && (
+            <button
+              type="button"
+              onClick={onRejoinRecentRoom}
+              className="w-full py-3 px-4 bg-emerald-950/80 hover:bg-emerald-900/80 border-2 border-emerald-500/60 text-emerald-200 font-bold rounded-2xl flex items-center justify-between gap-2 text-xs sm:text-sm transition-all shadow-lg cursor-pointer active:scale-[0.98]"
+            >
+              <div className="flex items-center gap-2 text-left">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                <span>{`Volver a Sala Online (${recentRoom.code}) · ${recentRoom.playerName}`}</span>
+              </div>
+              <span className="text-[11px] px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 font-mono shrink-0">
+                Ver Podio →
+              </span>
+            </button>
+          )}
+
           <button
             type="button"
             data-start="true"

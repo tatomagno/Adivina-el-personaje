@@ -8,6 +8,7 @@ import { CHARACTERS, BiblicalCharacter } from './data/characters';
 import {
   calculateRoundScore,
   checkGuess,
+  normalizeString,
   selectCharactersForRound,
   ScoreBreakdown,
 } from './game/scoring';
@@ -25,10 +26,13 @@ import { sound } from './utils/audio';
 import {
   OnlinePlayerState,
   OnlineRoomConfig,
+  RecentRoomEntry,
   publishRoomEvent,
   fetchCloudRoomSnapshot,
   subscribeToCloudRoom,
   publishGlobalLeaderboardEntry,
+  getRecentRooms,
+  saveRecentRoom,
 } from './utils/onlineSync';
 
 type GameState = 'title' | 'playing' | 'paused' | 'gameover';
@@ -40,7 +44,11 @@ interface PlayerInfo {
   streak: number;
   correctCount: number;
   turnsPlayed: number;
+  completed?: boolean;
+  updatedAt?: number;
 }
+
+const ACTIVE_SESSION_KEY = 'biblical_active_session_v2';
 
 export default function App() {
   // Screen State
@@ -78,7 +86,9 @@ export default function App() {
   const [onlinePlayerId, setOnlinePlayerId] = useState<string | undefined>(undefined);
   const [pendingOnlineConfig, setPendingOnlineConfig] = useState<OnlineRoomConfig | null>(null);
   const [onlineRoomPlayers, setOnlineRoomPlayers] = useState<OnlinePlayerState[]>([]);
+  const [recentRooms, setRecentRooms] = useState<RecentRoomEntry[]>(() => getRecentRooms());
   const roomUnsubRef = useRef<(() => void) | null>(null);
+  const roundDeadlineRef = useRef<number>(Date.now() + 45000);
 
   // Subscribe to cloud room updates whenever roomCode changes
   const connectToCloudRoom = useCallback((code: string) => {
@@ -90,6 +100,15 @@ export default function App() {
       setOnlineRoomPlayers(list);
     });
   }, []);
+
+  const refreshCloudRoomNow = useCallback(async () => {
+    if (!roomCode) return;
+    const snap = await fetchCloudRoomSnapshot(roomCode);
+    const list = Object.values(snap.players).sort((a, b) => b.score - a.score);
+    if (list.length > 0) {
+      setOnlineRoomPlayers(list);
+    }
+  }, [roomCode]);
 
   useEffect(() => {
     return () => {
@@ -109,15 +128,123 @@ export default function App() {
     document.body.dataset.state = gameState;
   }, [gameState]);
 
-  // Check URL params on mount (?autostart=1 or ?room=XYZ)
+  // Persist active match / gameover state in localStorage so refreshing the page (F5) never loses the match or Podio
+  useEffect(() => {
+    if (gameState === 'title') return;
+    try {
+      const payload = {
+        gameState,
+        gameMode,
+        difficulty,
+        category,
+        roundsCount,
+        timeLimit,
+        matchCharacters,
+        currentRoundIndex,
+        cluesUsed,
+        timeRemaining,
+        streak,
+        isRoundEnded,
+        lastRoundCorrect,
+        showRoundModal,
+        players,
+        activePlayerIndex,
+        history,
+        roomCode,
+        onlinePlayerId,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(payload));
+    } catch {}
+  }, [
+    gameState,
+    gameMode,
+    difficulty,
+    category,
+    roundsCount,
+    timeLimit,
+    matchCharacters,
+    currentRoundIndex,
+    cluesUsed,
+    timeRemaining,
+    streak,
+    isRoundEnded,
+    lastRoundCorrect,
+    showRoundModal,
+    players,
+    activePlayerIndex,
+    history,
+    roomCode,
+    onlinePlayerId,
+  ]);
+
+  const clearSavedSessionAndGoHome = () => {
+    try {
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+    } catch {}
+    setShowRoundModal(false);
+    setGameState('title');
+  };
+
+  // Check URL params on mount (?autostart=1 or ?room=XYZ) OR restore active session on page refresh
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const autostart = params.get('autostart');
-    const roomParam = params.get('room');
+    const roomParam = params.get('room')?.toUpperCase();
     const hostParam = params.get('h');
 
+    // Check if there is a saved session from before page reload
+    try {
+      const rawSaved = localStorage.getItem(ACTIVE_SESSION_KEY);
+      if (rawSaved) {
+        const saved = JSON.parse(rawSaved);
+        const ageMs = Date.now() - (saved.savedAt || 0);
+        // Restore if session is recent (< 6 hours) and either there is no new ?room= param or it matches the same room
+        if (
+          ageMs < 6 * 3600 * 1000 &&
+          saved.gameState &&
+          saved.gameState !== 'title' &&
+          (!roomParam || roomParam === saved.roomCode)
+        ) {
+          setGameMode(saved.gameMode || 'solo');
+          setDifficulty(saved.difficulty || 'medio');
+          setCategory(saved.category || 'Todos');
+          setRoundsCount(saved.roundsCount || 5);
+          setTimeLimit(saved.timeLimit || 45);
+          if (Array.isArray(saved.matchCharacters) && saved.matchCharacters.length > 0) {
+            setMatchCharacters(saved.matchCharacters);
+          }
+          setCurrentRoundIndex(saved.currentRoundIndex || 0);
+          setCluesUsed(saved.cluesUsed || 0);
+          const restoredRemaining = saved.timeRemaining ?? saved.timeLimit ?? 45;
+          setTimeRemaining(restoredRemaining);
+          roundDeadlineRef.current = Date.now() + restoredRemaining * 1000;
+          setStreak(saved.streak || 0);
+          setIsRoundEnded(Boolean(saved.isRoundEnded));
+          setLastRoundCorrect(Boolean(saved.lastRoundCorrect));
+          setShowRoundModal(Boolean(saved.showRoundModal));
+          if (Array.isArray(saved.players) && saved.players.length > 0) {
+            setPlayers(saved.players);
+          }
+          setActivePlayerIndex(saved.activePlayerIndex || 0);
+          if (Array.isArray(saved.history)) {
+            setHistory(saved.history);
+          }
+          if (saved.roomCode) {
+            setRoomCode(saved.roomCode);
+            connectToCloudRoom(saved.roomCode);
+          }
+          if (saved.onlinePlayerId) {
+            setOnlinePlayerId(saved.onlinePlayerId);
+          }
+          setGameState(saved.gameState);
+          return;
+        }
+      }
+    } catch {}
+
     if (roomParam) {
-      setInitialRoomCode(roomParam.toUpperCase());
+      setInitialRoomCode(roomParam);
       if (hostParam) setInitialHostName(hostParam);
       setShowMultiplayerModal(true);
     } else if (autostart === '1') {
@@ -129,31 +256,42 @@ export default function App() {
         time: 45,
       });
     }
-  }, []);
+  }, [connectToCloudRoom]);
 
-  // Timer Tick Loop
+  // Wall-clock accurate Timer Tick Loop (works reliably even if mobile screen locks or switches apps)
   useEffect(() => {
     if (gameState !== 'playing' || isRoundEnded) {
       if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
 
-    timerRef.current = setInterval(() => {
+    const checkRemainingTime = () => {
+      const remaining = Math.max(0, Math.ceil((roundDeadlineRef.current - Date.now()) / 1000));
       setTimeRemaining((prev) => {
-        if (prev <= 1) {
+        if (remaining <= 0) {
           if (timerRef.current) clearInterval(timerRef.current);
           handleTimeExpired();
           return 0;
         }
-        if (prev <= 11) {
+        if (remaining !== prev && remaining <= 10) {
           sound.playTick();
         }
-        return prev - 1;
+        return remaining;
       });
-    }, 1000);
+    };
+
+    timerRef.current = setInterval(checkRemainingTime, 250);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkRemainingTime();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [gameState, isRoundEnded, currentRoundIndex]);
 
@@ -189,6 +327,7 @@ export default function App() {
       } else if (gameState === 'paused') {
         if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
           e.preventDefault();
+          roundDeadlineRef.current = Date.now() + timeRemaining * 1000;
           setGameState('playing');
         }
       }
@@ -196,9 +335,9 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState, cluesUsed, isRoundEnded, difficulty, category, roundsCount, timeLimit]);
+  }, [gameState, cluesUsed, isRoundEnded, difficulty, category, roundsCount, timeLimit, timeRemaining]);
 
-  // Start a fresh match
+  // Start or resume a match
   const startMatch = useCallback(
     (opts: {
       mode: GameMode;
@@ -207,16 +346,21 @@ export default function App() {
       rounds: number;
       time: number;
       playerNames?: string[];
+      initialPlayers?: PlayerInfo[];
+      startRoundIndex?: number;
+      initialGameState?: GameState;
       roomCode?: string;
       seed?: string;
     }) => {
-      const setupPlayers: PlayerInfo[] = (opts.playerNames || ['Jugador 1']).map((name) => ({
-        name,
-        score: 0,
-        streak: 0,
-        correctCount: 0,
-        turnsPlayed: 0,
-      }));
+      const setupPlayers: PlayerInfo[] =
+        opts.initialPlayers ||
+        (opts.playerNames || ['Jugador 1']).map((name) => ({
+          name,
+          score: 0,
+          streak: 0,
+          correctCount: 0,
+          turnsPlayed: 0,
+        }));
 
       // Each player/team plays `opts.rounds` characters (e.g. 5 rounds x 2 players = 10 characters total)
       const totalTurns = opts.rounds * setupPlayers.length;
@@ -234,9 +378,10 @@ export default function App() {
       setRoundsCount(opts.rounds);
       setTimeLimit(opts.time);
       setMatchCharacters(selected);
-      setCurrentRoundIndex(0);
+      setCurrentRoundIndex(opts.startRoundIndex ?? 0);
       setCluesUsed(0);
       setTimeRemaining(opts.time);
+      roundDeadlineRef.current = Date.now() + opts.time * 1000;
       setStreak(0);
       setIsRoundEnded(false);
       setLastRoundCorrect(false);
@@ -247,7 +392,7 @@ export default function App() {
       setHistory([]);
       setRoomCode(opts.roomCode);
 
-      setGameState('playing');
+      setGameState(opts.initialGameState ?? 'playing');
     },
     []
   );
@@ -376,6 +521,7 @@ export default function App() {
       setCurrentRoundIndex((prev) => prev + 1);
       setCluesUsed(0);
       setTimeRemaining(timeLimit);
+      roundDeadlineRef.current = Date.now() + timeLimit * 1000;
       setIsRoundEnded(false);
       setLastRoundCorrect(false);
       setLastScoreBreakdown(undefined);
@@ -383,6 +529,23 @@ export default function App() {
       // Rotate turn in 2-Player or Teams mode
       if (players.length > 1) {
         setActivePlayerIndex((prev) => (prev + 1) % players.length);
+      }
+
+      // Refresh timestamp in online room when starting the new round so the opponent's countdown resets
+      if (gameMode === 'online' && roomCode && onlinePlayerId && players[0]) {
+        publishRoomEvent(roomCode, {
+          type: 'player_update',
+          player: {
+            id: onlinePlayerId,
+            name: players[0].name,
+            score: players[0].score,
+            correctCount: players[0].correctCount,
+            turnsPlayed: players[0].turnsPlayed,
+            totalRounds: matchCharacters.length,
+            completed: false,
+            updatedAt: Date.now(),
+          },
+        });
       }
     } else {
       // Game Over / Victory
@@ -513,6 +676,19 @@ export default function App() {
     setPendingOnlineConfig(finalRoomConfig);
     setOnlineRoomPlayers([initialHostPlayer]);
 
+    setRecentRooms(
+      saveRecentRoom({
+        code: finalRoomConfig.code,
+        playerName: config.hostName,
+        playerId: hostId,
+        difficulty: finalRoomConfig.difficulty,
+        category: finalRoomConfig.category,
+        roundsCount: finalRoomConfig.roundsCount,
+        timeLimit: finalRoomConfig.timeLimit,
+        updatedAt: Date.now(),
+      })
+    );
+
     // Publish room creation to cloud channel so any device joining by code or link gets full config + sees host
     await publishRoomEvent(finalRoomConfig.code, {
       type: 'room_created',
@@ -529,6 +705,21 @@ export default function App() {
   // Start the match once the host clicks "¡Empezar a Jugar Ahora!" in the waiting lobby
   const handleStartCreatedOnlineRoom = () => {
     if (!pendingOnlineConfig) return;
+    if (onlinePlayerId) {
+      publishRoomEvent(pendingOnlineConfig.code, {
+        type: 'player_update',
+        player: {
+          id: onlinePlayerId,
+          name: pendingOnlineConfig.hostName,
+          score: 0,
+          correctCount: 0,
+          turnsPlayed: 0,
+          totalRounds: pendingOnlineConfig.roundsCount,
+          completed: false,
+          updatedAt: Date.now(),
+        },
+      });
+    }
     startMatch({
       mode: 'online',
       diff: pendingOnlineConfig.difficulty,
@@ -541,12 +732,83 @@ export default function App() {
     });
   };
 
-  // Online Room Join (Fetches cloud room state + URL parameters fallback so both devices always get identical settings)
-  const handleJoinOnlineRoom = async (code: string, playerName: string): Promise<boolean> => {
+  // View the Podio of an online room directly without re-playing (e.g. after refreshing or checking results)
+  const handleViewOnlineRoomPodio = async (code: string, playerName?: string): Promise<boolean> => {
     const cleanCode = code.trim().toUpperCase();
     if (cleanCode.length < 4) return false;
 
-    const guestId = `guest_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    const firstChar = cleanCode.charAt(0);
+    const decodedDiff: 'facil' | 'medio' | 'dificil' | 'todas' =
+      firstChar === 'F'
+        ? 'facil'
+        : firstChar === 'D'
+        ? 'dificil'
+        : firstChar === 'T'
+        ? 'todas'
+        : 'medio';
+
+    let resolvedConfig: OnlineRoomConfig = {
+      code: cleanCode,
+      seed: cleanCode,
+      hostName: 'Anfitrión',
+      difficulty: decodedDiff,
+      category: 'Todos',
+      roundsCount: 3,
+      timeLimit: 60,
+    };
+
+    let existingPlayers: OnlinePlayerState[] = [];
+    try {
+      const cloudSnapshot = await fetchCloudRoomSnapshot(cleanCode);
+      if (cloudSnapshot.config) {
+        resolvedConfig = cloudSnapshot.config;
+      }
+      existingPlayers = Object.values(cloudSnapshot.players).sort((a, b) => b.score - a.score);
+      if (existingPlayers.length > 0) {
+        setOnlineRoomPlayers(existingPlayers);
+      }
+    } catch {}
+
+    const matchedPlayer = playerName
+      ? existingPlayers.find((p) => normalizeString(p.name) === normalizeString(playerName))
+      : existingPlayers[0];
+
+    if (matchedPlayer) {
+      setOnlinePlayerId(matchedPlayer.id);
+    }
+
+    connectToCloudRoom(cleanCode);
+
+    startMatch({
+      mode: 'online',
+      diff: resolvedConfig.difficulty,
+      cat: resolvedConfig.category,
+      rounds: resolvedConfig.roundsCount,
+      time: resolvedConfig.timeLimit,
+      initialPlayers: matchedPlayer
+        ? [
+            {
+              name: matchedPlayer.name,
+              score: matchedPlayer.score,
+              streak: 0,
+              correctCount: matchedPlayer.correctCount,
+              turnsPlayed: matchedPlayer.turnsPlayed,
+              completed: matchedPlayer.completed,
+              updatedAt: matchedPlayer.updatedAt,
+            },
+          ]
+        : [{ name: playerName || 'Espectador', score: 0, streak: 0, correctCount: 0, turnsPlayed: 0 }],
+      initialGameState: 'gameover',
+      roomCode: resolvedConfig.code,
+      seed: resolvedConfig.seed,
+    });
+    return true;
+  };
+
+  // Online Room Join (Smart resume / Podio view if player already exists in room, or fresh start if new)
+  const handleJoinOnlineRoom = async (code: string, playerName: string): Promise<boolean> => {
+    const cleanCode = code.trim().toUpperCase();
+    if (cleanCode.length < 4) return false;
 
     // 1. Check URL query parameters first (if user opened a shared link)
     const params = new URLSearchParams(window.location.search);
@@ -577,40 +839,107 @@ export default function App() {
     };
 
     // 3. Fetch cloud room snapshot (works even if guest only typed the 6-letter code manually!)
+    let existingPlayers: OnlinePlayerState[] = [];
     try {
       const cloudSnapshot = await fetchCloudRoomSnapshot(cleanCode);
       if (cloudSnapshot.config) {
         resolvedConfig = cloudSnapshot.config;
       }
-      const existingPlayers = Object.values(cloudSnapshot.players);
+      existingPlayers = Object.values(cloudSnapshot.players).sort((a, b) => b.score - a.score);
       if (existingPlayers.length > 0) {
         setOnlineRoomPlayers(existingPlayers);
       }
     } catch {}
 
-    // 4. Optional local backend check
-    try {
-      const res = await fetch(`/api/rooms/${cleanCode}/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerName }),
-      });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json();
-        if (data.success && data.room) {
-          resolvedConfig = {
-            code: data.room.code,
-            seed: data.room.seed,
-            hostName: resolvedConfig.hostName,
-            difficulty: data.room.difficulty,
-            category: data.room.category,
-            roundsCount: data.room.roundsCount,
-            timeLimit: data.room.timeLimit,
-          };
-        }
+    // 4. Check if this player ALREADY exists in the room (e.g. rejoining after page refresh!)
+    const existingSelf = existingPlayers.find(
+      (p) => normalizeString(p.name) === normalizeString(playerName)
+    );
+
+    if (existingSelf) {
+      setOnlinePlayerId(existingSelf.id);
+      setRoomCode(cleanCode);
+      connectToCloudRoom(cleanCode);
+
+      setRecentRooms(
+        saveRecentRoom({
+          code: cleanCode,
+          playerName: existingSelf.name,
+          playerId: existingSelf.id,
+          difficulty: resolvedConfig.difficulty,
+          category: resolvedConfig.category,
+          roundsCount: resolvedConfig.roundsCount,
+          timeLimit: resolvedConfig.timeLimit,
+          updatedAt: Date.now(),
+        })
+      );
+
+      const alreadyFinished =
+        existingSelf.completed || existingSelf.turnsPlayed >= resolvedConfig.roundsCount;
+
+      if (alreadyFinished) {
+        // Player already completed all rounds -> take them straight to the Podio!
+        startMatch({
+          mode: 'online',
+          diff: resolvedConfig.difficulty,
+          cat: resolvedConfig.category,
+          rounds: resolvedConfig.roundsCount,
+          time: resolvedConfig.timeLimit,
+          initialPlayers: [
+            {
+              name: existingSelf.name,
+              score: existingSelf.score,
+              streak: 0,
+              correctCount: existingSelf.correctCount,
+              turnsPlayed: existingSelf.turnsPlayed,
+              completed: true,
+              updatedAt: existingSelf.updatedAt,
+            },
+          ],
+          initialGameState: 'gameover',
+          roomCode: resolvedConfig.code,
+          seed: resolvedConfig.seed,
+        });
+        return true;
+      } else if (existingSelf.turnsPlayed > 0) {
+        // Player was mid-game -> resume on their next unplayed round!
+        const refreshedState: OnlinePlayerState = {
+          ...existingSelf,
+          updatedAt: Date.now(),
+        };
+        await publishRoomEvent(cleanCode, {
+          type: 'player_update',
+          player: refreshedState,
+        });
+
+        startMatch({
+          mode: 'online',
+          diff: resolvedConfig.difficulty,
+          cat: resolvedConfig.category,
+          rounds: resolvedConfig.roundsCount,
+          time: resolvedConfig.timeLimit,
+          initialPlayers: [
+            {
+              name: existingSelf.name,
+              score: existingSelf.score,
+              streak: 0,
+              correctCount: existingSelf.correctCount,
+              turnsPlayed: existingSelf.turnsPlayed,
+              completed: false,
+              updatedAt: Date.now(),
+            },
+          ],
+          startRoundIndex: existingSelf.turnsPlayed,
+          roomCode: resolvedConfig.code,
+          seed: resolvedConfig.seed,
+        });
+        return true;
       }
-    } catch {}
+    }
+
+    const guestId =
+      existingSelf?.id ||
+      `guest_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
 
     const guestPlayerState: OnlinePlayerState = {
       id: guestId,
@@ -625,6 +954,19 @@ export default function App() {
 
     setOnlinePlayerId(guestId);
     setRoomCode(cleanCode);
+
+    setRecentRooms(
+      saveRecentRoom({
+        code: cleanCode,
+        playerName,
+        playerId: guestId,
+        difficulty: resolvedConfig.difficulty,
+        category: resolvedConfig.category,
+        roundsCount: resolvedConfig.roundsCount,
+        timeLimit: resolvedConfig.timeLimit,
+        updatedAt: Date.now(),
+      })
+    );
 
     // Announce guest join to cloud room so host sees guest immediately
     await publishRoomEvent(cleanCode, {
@@ -660,9 +1002,6 @@ export default function App() {
     1000 - cluesUsed * 160 + Math.round(timeRemaining * (difficulty === 'dificil' ? 15 : 10))
   );
 
-  const totalScoreAll = players.reduce((sum, p) => sum + p.score, 0);
-  const correctCountAll = history.filter((h) => h.guessed).length;
-
   // Build unified scoreboard for online mode (merging local player state with live cloud players)
   const displayScoreboard: PlayerInfo[] | undefined =
     gameMode === 'online'
@@ -675,15 +1014,23 @@ export default function App() {
               streak: 0,
               correctCount: op.correctCount,
               turnsPlayed: op.turnsPlayed,
+              completed: op.completed,
+              updatedAt: op.updatedAt,
             });
           }
           if (onlinePlayerId && players[0]) {
+            const existing = map.get(onlinePlayerId);
             map.set(onlinePlayerId, {
               name: players[0].name,
-              score: players[0].score,
+              score: Math.max(players[0].score, existing?.score ?? 0),
               streak: players[0].streak,
-              correctCount: players[0].correctCount,
-              turnsPlayed: players[0].turnsPlayed,
+              correctCount: Math.max(players[0].correctCount, existing?.correctCount ?? 0),
+              turnsPlayed: Math.max(players[0].turnsPlayed, existing?.turnsPlayed ?? 0),
+              completed:
+                gameState === 'gameover' ||
+                existing?.completed ||
+                players[0].turnsPlayed >= roundsCount,
+              updatedAt: existing?.updatedAt || Date.now(),
             });
           }
           const list = Array.from(map.values()).sort((a, b) => b.score - a.score);
@@ -692,6 +1039,17 @@ export default function App() {
       : players.length > 1
       ? players
       : undefined;
+
+  const totalScoreAll =
+    players.reduce((sum, p) => sum + p.score, 0) ||
+    (gameMode === 'online' && displayScoreboard?.[0]?.score) ||
+    0;
+  const correctCountAll =
+    history.length > 0
+      ? history.filter((h) => h.guessed).length
+      : players.reduce((sum, p) => sum + p.correctCount, 0) ||
+        (gameMode === 'online' && displayScoreboard?.[0]?.correctCount) ||
+        0;
 
   return (
     <div className="w-full min-h-screen bg-stone-950 text-stone-100 flex flex-col justify-between font-sans relative select-none">
@@ -715,6 +1073,16 @@ export default function App() {
           onOpenLeaderboard={() => setShowLeaderboardModal(true)}
           isMuted={isMuted}
           onToggleMute={() => setIsMuted(sound.toggleMute())}
+          recentRoom={
+            recentRooms.length > 0
+              ? { code: recentRooms[0].code, playerName: recentRooms[0].playerName }
+              : null
+          }
+          onRejoinRecentRoom={() => {
+            if (recentRooms.length > 0) {
+              handleJoinOnlineRoom(recentRooms[0].code, recentRooms[0].playerName);
+            }
+          }}
         />
       )}
 
@@ -787,13 +1155,17 @@ export default function App() {
             players.length > 1 ? players[(activePlayerIndex + 1) % players.length]?.name : undefined
           }
           playerScores={displayScoreboard}
+          gameMode={gameMode}
         />
       )}
 
       {/* 4. PAUSE MODAL */}
       {gameState === 'paused' && (
         <PauseModal
-          onResume={() => setGameState('playing')}
+          onResume={() => {
+            roundDeadlineRef.current = Date.now() + timeRemaining * 1000;
+            setGameState('playing');
+          }}
           onRestart={() =>
             startMatch({
               mode: gameMode,
@@ -806,7 +1178,7 @@ export default function App() {
               seed: roomCode,
             })
           }
-          onHome={() => setGameState('title')}
+          onHome={clearSavedSessionAndGoHome}
         />
       )}
 
@@ -815,8 +1187,9 @@ export default function App() {
         <GameOverModal
           totalScore={totalScoreAll}
           correctCount={correctCountAll}
-          totalRounds={matchCharacters.length}
+          totalRounds={matchCharacters.length || roundsCount}
           roundsPerPlayer={roundsCount}
+          timeLimit={timeLimit}
           difficulty={difficulty}
           gameMode={gameMode}
           charactersPlayed={history}
@@ -832,9 +1205,10 @@ export default function App() {
               seed: roomCode,
             })
           }
-          onHome={() => setGameState('title')}
+          onHome={clearSavedSessionAndGoHome}
           roomCode={roomCode}
           playerScores={displayScoreboard}
+          onRefreshOnlineRoom={refreshCloudRoomNow}
           onSubmitLeaderboard={handleLeaderboardSubmit}
         />
       )}
@@ -846,6 +1220,7 @@ export default function App() {
         initialRoomCode={initialRoomCode}
         initialHostName={initialHostName}
         onlineRoomPlayers={onlineRoomPlayers}
+        recentRooms={recentRooms}
         onStartPassAndPlay={(config) => {
           startMatch({
             mode: config.isTeams ? 'equipos' : 'duo',
@@ -859,6 +1234,7 @@ export default function App() {
         onCreateOnlineRoom={handleCreateOnlineRoom}
         onStartCreatedOnlineRoom={handleStartCreatedOnlineRoom}
         onJoinOnlineRoom={handleJoinOnlineRoom}
+        onViewOnlineRoomPodio={handleViewOnlineRoomPodio}
       />
 
       {/* 7. GLOBAL LEADERBOARD MODAL */}
