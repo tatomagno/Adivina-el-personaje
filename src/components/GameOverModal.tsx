@@ -11,13 +11,14 @@ interface GameOverModalProps {
   totalScore: number;
   correctCount: number;
   totalRounds: number;
+  roundsPerPlayer?: number;
   difficulty: string;
   gameMode: string;
-  charactersPlayed: { character: BiblicalCharacter; guessed: boolean; score: number }[];
+  charactersPlayed: { character: BiblicalCharacter; guessed: boolean; score: number; playerName?: string }[];
   onRestart: () => void;
   onHome: () => void;
   roomCode?: string;
-  playerScores?: { name: string; score: number }[];
+  playerScores?: { name: string; score: number; correctCount?: number }[];
   onSubmitLeaderboard: (name: string, groupName?: string) => Promise<void>;
 }
 
@@ -25,6 +26,7 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   totalScore,
   correctCount,
   totalRounds,
+  roundsPerPlayer,
   difficulty,
   gameMode,
   charactersPlayed,
@@ -68,6 +70,8 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
   // Winner evaluation for Duo / Equipos mode
   const sortedPlayers = playerScores ? [...playerScores].sort((a, b) => b.score - a.score) : [];
   const winner = sortedPlayers.length > 0 ? sortedPlayers[0] : null;
+  const isTie =
+    sortedPlayers.length > 1 && sortedPlayers[0].score === sortedPlayers[1].score;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
@@ -86,7 +90,7 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
 
           {winner && sortedPlayers.length > 1 ? (
             <h2 className="text-2xl sm:text-3xl font-black font-serif text-amber-100 mt-1">
-              ¡Ganador: {winner.name}!
+              {isTie ? '¡Empate Épico!' : `¡Ganador: ${winner.name}!`}
             </h2>
           ) : (
             <h2 className="text-2xl sm:text-3xl font-black font-serif text-amber-100 mt-1">
@@ -98,7 +102,9 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         {/* Big Metrics Grid */}
         <div className="grid grid-cols-3 gap-2.5 bg-stone-950/80 border border-amber-500/30 rounded-2xl p-4 text-center">
           <div>
-            <span className="text-[11px] uppercase font-bold text-stone-400 block">Puntaje</span>
+            <span className="text-[11px] uppercase font-bold text-stone-400 block">
+              {sortedPlayers.length > 1 ? 'Total Partida' : 'Puntaje'}
+            </span>
             <span className="text-xl sm:text-2xl font-mono font-black text-amber-400">
               {totalScore}
             </span>
@@ -120,9 +126,16 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
         {/* Multiplayer Standings if 2+ players */}
         {sortedPlayers.length > 1 && (
           <div className="bg-amber-950/30 border border-amber-500/30 rounded-2xl p-3.5 space-y-2">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300 uppercase tracking-wider">
-              <Users className="w-4 h-4" />
-              <span>Podio de Jugadores</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300 uppercase tracking-wider">
+                <Users className="w-4 h-4" />
+                <span>Podio de Jugadores</span>
+              </div>
+              {roundsPerPlayer && (
+                <span className="text-[11px] text-amber-400/80 font-mono">
+                  {roundsPerPlayer} personajes c/u
+                </span>
+              )}
             </div>
             <div className="space-y-1.5">
               {sortedPlayers.map((p, index) => (
@@ -137,6 +150,11 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs w-4">#{index + 1}</span>
                     <span>{p.name}</span>
+                    {p.correctCount !== undefined && roundsPerPlayer && (
+                      <span className="text-[11px] text-stone-400 font-normal">
+                        ({p.correctCount}/{roundsPerPlayer} aciertos)
+                      </span>
+                    )}
                   </div>
                   <span className="font-mono font-black text-amber-400">{p.score} pts</span>
                 </div>
@@ -150,7 +168,7 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
           <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block mb-1">
             Personajes de la Partida:
           </span>
-          {charactersPlayed.map(({ character, guessed, score }, i) => (
+          {charactersPlayed.map(({ character, guessed, score, playerName: pName }, i) => (
             <div
               key={i}
               className="flex items-center justify-between py-1 px-2 rounded-lg bg-stone-900/60 text-xs"
@@ -162,6 +180,11 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
                   <span className="w-3.5 h-3.5 text-rose-400 text-center font-bold">✕</span>
                 )}
                 <span className="font-medium text-stone-200">{character.name}</span>
+                {pName && sortedPlayers.length > 1 && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-800 text-amber-300/80">
+                    {pName}
+                  </span>
+                )}
               </div>
               <span className="font-mono text-stone-400">+{score} pts</span>
             </div>

@@ -301,7 +301,7 @@ export const MultiplayerSetupModal: React.FC<MultiplayerSetupModalProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-stone-300 block mb-1">
-                  Cantidad de Rondas
+                  Rondas ({roundsCount} c/u)
                 </label>
                 <div className="flex gap-1.5">
                   {[3, 5, 7, 10].map((num) => (

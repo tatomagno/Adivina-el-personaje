@@ -132,28 +132,43 @@ export function selectCharactersForRound<T extends CharacterRef>(
     seed?: string;
   }
 ): T[] {
-  let filtered = [...allCharacters];
+  const targetCount = options.count || 5;
+  const rng = options.seed ? createSeededRandom(options.seed) : Math.random;
+
+  const shuffle = (arr: T[]) => {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+
+  let primary = [...allCharacters];
 
   if (options.difficulty && options.difficulty !== 'todas') {
-    filtered = filtered.filter((c) => c.difficulty === options.difficulty);
+    primary = primary.filter((c) => c.difficulty === options.difficulty);
   }
 
   if (options.category && options.category !== 'Todos') {
-    filtered = filtered.filter((c) => c.category === options.category);
+    primary = primary.filter((c) => c.category === options.category);
   }
 
-  // Fallback to all if too few matched
-  if (filtered.length < (options.count || 5)) {
-    filtered = [...allCharacters];
+  let result = shuffle(primary);
+
+  // If primary filter has fewer characters than needed (e.g. 2 players x 10 rounds = 20),
+  // top up with remaining characters of the same difficulty, then any remaining characters.
+  if (result.length < targetCount) {
+    const usedIds = new Set(result.map((c) => c.id));
+    let secondary = allCharacters.filter((c) => !usedIds.has(c.id));
+    if (options.difficulty && options.difficulty !== 'todas') {
+      const sameDiff = secondary.filter((c) => c.difficulty === options.difficulty);
+      const otherDiff = secondary.filter((c) => c.difficulty !== options.difficulty);
+      result = [...result, ...shuffle(sameDiff), ...shuffle(otherDiff)];
+    } else {
+      result = [...result, ...shuffle(secondary)];
+    }
   }
 
-  const rng = options.seed ? createSeededRandom(options.seed) : Math.random;
-
-  // Fisher-Yates shuffle
-  for (let i = filtered.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [filtered[i], filtered[j]] = [filtered[j], filtered[i]];
-  }
-
-  return filtered.slice(0, options.count || 5);
+  return result.slice(0, targetCount);
 }

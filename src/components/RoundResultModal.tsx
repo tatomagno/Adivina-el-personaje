@@ -17,7 +17,8 @@ interface RoundResultModalProps {
   isLastRound: boolean;
   onNextRound: () => void;
   activePlayerName?: string;
-  playerScores?: { name: string; score: number }[];
+  nextPlayerName?: string;
+  playerScores?: { name: string; score: number; correctCount?: number; turnsPlayed?: number }[];
 }
 
 export const RoundResultModal: React.FC<RoundResultModalProps> = ({
@@ -29,6 +30,7 @@ export const RoundResultModal: React.FC<RoundResultModalProps> = ({
   isLastRound,
   onNextRound,
   activePlayerName,
+  nextPlayerName,
   playerScores,
 }) => {
   return (
@@ -128,6 +130,11 @@ export const RoundResultModal: React.FC<RoundResultModalProps> = ({
                 <div key={idx} className="text-center">
                   <div className="text-xs font-bold text-stone-300">{p.name}</div>
                   <div className="text-sm font-mono font-black text-amber-400">{p.score} pts</div>
+                  {p.turnsPlayed !== undefined && (
+                    <div className="text-[10px] text-stone-400">
+                      {p.correctCount || 0}/{p.turnsPlayed} aciertos
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -141,7 +148,13 @@ export const RoundResultModal: React.FC<RoundResultModalProps> = ({
           onClick={onNextRound}
           className="w-full py-3.5 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-stone-950 font-bold rounded-2xl flex items-center justify-center gap-2 text-base transition-all shadow-xl active:scale-[0.98] cursor-pointer"
         >
-          <span>{isLastRound ? 'Ver Resultados Finales' : 'Siguiente Personaje'}</span>
+          <span>
+            {isLastRound
+              ? 'Ver Resultados Finales'
+              : nextPlayerName
+              ? `Siguiente Turno: ${nextPlayerName}`
+              : 'Siguiente Personaje'}
+          </span>
           <ArrowRight className="w-5 h-5" />
         </button>
       </div>

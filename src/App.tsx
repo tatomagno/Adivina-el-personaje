@@ -29,6 +29,9 @@ type GameMode = 'solo' | 'duo' | 'equipos' | 'online';
 interface PlayerInfo {
   name: string;
   score: number;
+  streak: number;
+  correctCount: number;
+  turnsPlayed: number;
 }
 
 export default function App() {
@@ -52,9 +55,13 @@ export default function App() {
   const [showRoundModal, setShowRoundModal] = useState<boolean>(false);
 
   // Players / Teams State
-  const [players, setPlayers] = useState<PlayerInfo[]>([{ name: 'Jugador 1', score: 0 }]);
+  const [players, setPlayers] = useState<PlayerInfo[]>([
+    { name: 'Jugador 1', score: 0, streak: 0, correctCount: 0, turnsPlayed: 0 },
+  ]);
   const [activePlayerIndex, setActivePlayerIndex] = useState<number>(0);
-  const [history, setHistory] = useState<{ character: BiblicalCharacter; guessed: boolean; score: number }[]>([]);
+  const [history, setHistory] = useState<
+    { character: BiblicalCharacter; guessed: boolean; score: number; playerName?: string }[]
+  >([]);
 
   // Online Room State
   const [roomCode, setRoomCode] = useState<string | undefined>(undefined);
@@ -172,17 +179,23 @@ export default function App() {
       roomCode?: string;
       seed?: string;
     }) => {
-      const selected = selectCharactersForRound(CHARACTERS, {
-        difficulty: opts.diff,
-        category: opts.cat,
-        count: opts.rounds,
-        seed: opts.seed,
-      });
-
       const setupPlayers: PlayerInfo[] = (opts.playerNames || ['Jugador 1']).map((name) => ({
         name,
         score: 0,
+        streak: 0,
+        correctCount: 0,
+        turnsPlayed: 0,
       }));
+
+      // Each player/team plays `opts.rounds` characters (e.g. 5 rounds x 2 players = 10 characters total)
+      const totalTurns = opts.rounds * setupPlayers.length;
+
+      const selected = selectCharactersForRound(CHARACTERS, {
+        difficulty: opts.diff,
+        category: opts.cat,
+        count: totalTurns,
+        seed: opts.seed,
+      });
 
       setGameMode(opts.mode);
       setDifficulty(opts.diff);
@@ -248,6 +261,8 @@ export default function App() {
     setIsRoundEnded(true);
     setLastRoundCorrect(isCorrect);
     const current = matchCharacters[currentRoundIndex];
+    const activePlayer = players[activePlayerIndex];
+    const currentPlayerStreak = activePlayer ? activePlayer.streak : streak;
 
     let breakdown: ScoreBreakdown | undefined = undefined;
     let earnedPoints = 0;
@@ -258,23 +273,41 @@ export default function App() {
         totalTime: timeLimit,
         cluesUsed,
         difficulty: current.difficulty,
-        streak,
+        streak: currentPlayerStreak,
       });
       earnedPoints = breakdown.totalScore;
-      setStreak((prev) => prev + 1);
+      setStreak(currentPlayerStreak + 1);
     } else {
       setStreak(0);
     }
 
     setLastScoreBreakdown(breakdown);
 
-    // Update active player's score
+    // Update active player's score, streak, correctCount, and turnsPlayed
     setPlayers((prev) =>
-      prev.map((p, idx) => (idx === activePlayerIndex ? { ...p, score: p.score + earnedPoints } : p))
+      prev.map((p, idx) =>
+        idx === activePlayerIndex
+          ? {
+              ...p,
+              score: p.score + earnedPoints,
+              streak: isCorrect ? p.streak + 1 : 0,
+              correctCount: p.correctCount + (isCorrect ? 1 : 0),
+              turnsPlayed: p.turnsPlayed + 1,
+            }
+          : p
+      )
     );
 
-    // Record history
-    setHistory((prev) => [...prev, { character: current, guessed: isCorrect, score: earnedPoints }]);
+    // Record history with player name
+    setHistory((prev) => [
+      ...prev,
+      {
+        character: current,
+        guessed: isCorrect,
+        score: earnedPoints,
+        playerName: activePlayer?.name,
+      },
+    ]);
 
     // Show round end modal
     setShowRoundModal(true);
@@ -508,12 +541,12 @@ export default function App() {
         <div className="w-full flex-1 flex flex-col justify-between">
           {/* Top HUD */}
           <GameHUD
-            currentRound={currentRoundIndex + 1}
-            totalRounds={matchCharacters.length}
+            currentRound={Math.floor(currentRoundIndex / Math.max(1, players.length)) + 1}
+            totalRounds={roundsCount}
             timeRemaining={timeRemaining}
             totalTime={timeLimit}
             potentialPoints={currentPotentialPoints}
-            streak={streak}
+            streak={players[activePlayerIndex]?.streak ?? streak}
             activePlayerName={players.length > 1 ? players[activePlayerIndex]?.name : undefined}
             gameMode={gameMode}
             isMuted={isMuted}
@@ -568,6 +601,9 @@ export default function App() {
           isLastRound={currentRoundIndex + 1 >= matchCharacters.length}
           onNextRound={handleNextRound}
           activePlayerName={players.length > 1 ? players[activePlayerIndex]?.name : undefined}
+          nextPlayerName={
+            players.length > 1 ? players[(activePlayerIndex + 1) % players.length]?.name : undefined
+          }
           playerScores={players.length > 1 ? players : undefined}
         />
       )}
@@ -597,6 +633,7 @@ export default function App() {
           totalScore={totalScoreAll}
           correctCount={correctCountAll}
           totalRounds={matchCharacters.length}
+          roundsPerPlayer={roundsCount}
           difficulty={difficulty}
           gameMode={gameMode}
           charactersPlayed={history}
